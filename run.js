@@ -412,7 +412,7 @@ async function main() {
 
     // Launch browser
     const browser = await puppeteer.launch({
-        headless: false,
+        headless: true,
         executablePath: process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
         args: [
             '--no-sandbox',
