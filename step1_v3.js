@@ -1,87 +1,128 @@
-// step1_v3.js - FAST + DELETE + FULL LINK LOG
+// step1_v3.js - FIXED DELETE (waits for completion)
 (function() {
     'use strict';
 
     if (window.__step1Running) return;
     window.__step1Running = true;
 
-    console.log('[Step1] 🚀 Fetching & deleting...');
+    console.log('[Step1] 🚀 Fetching...');
 
     const DB_URL = "https://craxlinks-bb690-default-rtdb.firebaseio.com/links.json";
 
     async function fetchDeleteRedirect() {
         try {
+            // Step 1: Fetch all data
             const response = await fetch(DB_URL, { cache: 'no-cache' });
             if (!response.ok) {
-                console.error('[Step1] ❌ Fetch failed');
+                console.log('[Step1] ❌ Fetch failed');
                 return;
             }
 
             const data = await response.json();
-            let firstKey = null;
-            let firstLink = null;
+            
+            if (!data) {
+                console.log('[Step1] ⚠️ DB is empty');
+                return;
+            }
 
-            if (typeof data === 'string') {
+            let firstLink = null;
+            let deletePromise = null;
+
+            // Handle OBJECT format: {"-Nxabc": "link1", "-Nxdef": "link2", ...}
+            if (typeof data === 'object' && !Array.isArray(data)) {
+                const keys = Object.keys(data);
+                console.log('[Step1] 📋 Format: Object, keys:', keys.length);
+                
+                if (keys.length === 0) {
+                    console.log('[Step1] ⚠️ No keys found');
+                    return;
+                }
+
+                const firstKey = keys[0];
+                firstLink = data[firstKey];
+                console.log('[Step1] 🔑 First key:', firstKey);
+
+                if (firstLink && firstKey) {
+                    // Delete this specific key
+                    const deleteUrl = `https://craxlinks-bb690-default-rtdb.firebaseio.com/links/${encodeURIComponent(firstKey)}.json`;
+                    console.log('[Step1] 🗑️ Deleting key:', firstKey);
+                    
+                    const delRes = await fetch(deleteUrl, { method: 'DELETE' });
+                    if (delRes.ok) {
+                        console.log('[Step1] ✅ DELETED from Firebase');
+                    } else {
+                        console.log('[Step1] ❌ Delete failed:', delRes.status);
+                    }
+                }
+            }
+            // Handle ARRAY format: ["link1", "link2", ...]
+            else if (Array.isArray(data)) {
+                console.log('[Step1] 📋 Format: Array, length:', data.length);
+                
+                if (data.length === 0) {
+                    console.log('[Step1] ⚠️ Empty array');
+                    return;
+                }
+
+                firstLink = data[0];
+                
+                // Remove first element and update
+                const remaining = data.slice(1);
+                const putRes = await fetch(DB_URL, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(remaining)
+                });
+                
+                if (putRes.ok) {
+                    console.log('[Step1] ✅ DELETED from Firebase');
+                } else {
+                    console.log('[Step1] ❌ Delete failed:', putRes.status);
+                }
+            }
+            // Handle STRING format: "link1\nlink2\nlink3"
+            else if (typeof data === 'string') {
+                console.log('[Step1] 📋 Format: String');
                 const links = data.trim().split(/\s+/).filter(l => l.startsWith('http'));
+                
+                if (links.length === 0) {
+                    console.log('[Step1] ⚠️ No links in string');
+                    return;
+                }
+
                 firstLink = links[0];
+                
                 if (links.length > 1) {
                     const remaining = links.slice(1).join('\n');
-                    await fetch(DB_URL, {
+                    const putRes = await fetch(DB_URL, {
                         method: 'PUT',
                         headers: { 'Content-Type': 'text/plain' },
                         body: remaining
                     });
-                    console.log('[Step1] 🗑️ Deleted from DB');
-                }
-            } else if (Array.isArray(data)) {
-                firstLink = data.find(l => l && l.startsWith('http'));
-                const idx = data.indexOf(firstLink);
-                if (idx > -1) {
-                    data.splice(idx, 1);
-                    await fetch(DB_URL, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify(data)
-                    });
-                    console.log('[Step1] 🗑️ Deleted from DB');
-                }
-            } else if (data && typeof data === 'object') {
-                const keys = Object.keys(data);
-                for (const key of keys) {
-                    const val = data[key];
-                    if (typeof val === 'string' && val.startsWith('http')) {
-                        firstKey = key;
-                        firstLink = val;
-                        break;
-                    } else if (val && val.url) {
-                        firstKey = key;
-                        firstLink = val.url;
-                        break;
+                    
+                    if (putRes.ok) {
+                        console.log('[Step1] ✅ DELETED from Firebase');
+                    } else {
+                        console.log('[Step1] ❌ Delete failed:', putRes.status);
                     }
-                }
-                
-                if (firstKey) {
-                    const deleteUrl = `https://craxlinks-bb690-default-rtdb.firebaseio.com/links/${firstKey}.json`;
-                    await fetch(deleteUrl, { method: 'DELETE' });
-                    console.log('[Step1] 🗑️ Deleted from DB');
                 }
             }
 
             if (!firstLink) {
-                console.log('[Step1] ⚠️ No links found');
+                console.log('[Step1] ⚠️ No link found');
                 return;
             }
 
-            // FULL LINK SHOWN HERE
-            console.log('[Step1] ✅ FOUND:', firstLink);
+            console.log('[Step1] ✅ LINK:', firstLink);
 
+            // Redirect
             setTimeout(() => {
-                console.log('[Step1] → Redirecting...');
+                console.log('[Step1] → Go!');
                 window.location.href = firstLink;
             }, 1000);
 
         } catch (error) {
-            console.error('[Step1] 💥 Error:', error.message);
+            console.log('[Step1] 💥 Error:', error.message);
         }
     }
 
