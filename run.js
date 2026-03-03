@@ -1,5 +1,5 @@
 // run.js - Multi-Account Bot with New Flow (Fetch → Like → Repeat)
-// Version: 2.0
+// Version: 2.1 - Fixed detached frame crash recovery
 // 
 // Flow:
 // 1. Start at craxpro.to homepage
@@ -21,9 +21,8 @@ const ONE_HOUR_MS = 60 * 60 * 1000;
 const HEARTBEAT_MS = 60 * 1000;
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const WATCHDOG_INTERVAL_MS = 30 * 1000;
-const MAX_RESTARTS_PER_ACCOUNT = 5;
+const MAX_RESTARTS_PER_ACCOUNT = 10;
 
-// ✅ FIX: Use root directory instead of 'userscripts' subfolder
 const SCRIPTS_FOLDER = __dirname;
 
 function sleep(ms) { 
@@ -75,11 +74,12 @@ async function runAccount(browser, account) {
     console.log(`🚀 START ACCOUNT: ${account.name}`);
     console.log(`${'='.repeat(50)}`);
     
-    let page;
+    let page = null;
     let lastActivity = Date.now();
     let restartCount = 0;
     let lastInjectedUrl = '';
     let cycleCount = 0;
+    let pageBroken = false;
 
     const touch = () => lastActivity = Date.now();
 
@@ -88,9 +88,8 @@ async function runAccount(browser, account) {
     // ============================================
     console.log('[runner] 📂 Loading userscripts...');
     
-    // ✅ FIX: Use correct filename with uppercase 'V' to match actual file
-    const step1Script = loadScript('step1_v3.js');      // Fetch link & redirect
-    const step2Script = loadScript('step2_v3.js');      // Like & redirect
+    const step1Script = loadScript('step1_v3.js');
+    const step2Script = loadScript('step2_v3.js');
     const autoReloadScript = loadScript('auto_reload_v2.js');
     
     console.log('[runner] ✅ Scripts loaded:');
@@ -102,17 +101,18 @@ async function runAccount(browser, account) {
     // OPEN PAGE & SETUP
     // ============================================
     async function openPage() {
+        if (page) {
+            try { await page.close(); } catch (e) {}
+        }
+        
         page = await browser.newPage();
+        pageBroken = false;
 
-        // Set user agent and viewport
         await page.setUserAgent(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         );
         await page.setViewport({ width: 1366, height: 768 });
 
-        // ============================================
-        // EXPOSE FETCH PROXY (for CORS fallback)
-        // ============================================
         await page.exposeFunction('__FETCH_PROXY', async (url) => {
             try {
                 const result = await page.evaluate(async (fetchUrl) => {
@@ -142,34 +142,11 @@ async function runAccount(browser, account) {
             }
         });
 
-        // ============================================
-        // STEALTH EVASIONS
-        // ============================================
         await page.evaluateOnNewDocument(() => {
-            // Hide webdriver property
-            Object.defineProperty(navigator, 'webdriver', { 
-                get: () => undefined 
-            });
-            
-            // Fake chrome object
-            window.chrome = { 
-                runtime: {},
-                loadTimes: function() {},
-                csi: function() {},
-                app: {}
-            };
-            
-            // Fake plugins
-            Object.defineProperty(navigator, 'plugins', { 
-                get: () => [1, 2, 3, 4, 5] 
-            });
-            
-            // Fake languages
-            Object.defineProperty(navigator, 'languages', { 
-                get: () => ['en-US', 'en'] 
-            });
-            
-            // Override permissions query
+            Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
             const originalQuery = window.navigator.permissions.query;
             window.navigator.permissions.query = (parameters) =>
                 parameters.name === 'notifications'
@@ -177,20 +154,12 @@ async function runAccount(browser, account) {
                     : originalQuery(parameters);
         });
 
-        // ============================================
-        // SET COOKIES
-        // ============================================
         if (Array.isArray(account.cookies) && account.cookies.length) {
             const normalized = account.cookies.map(normalizeCookieForPuppeteer);
             await page.setCookie(...normalized);
             console.log(`[runner] 🍪 Set ${normalized.length} cookies`);
         }
 
-        // ============================================
-        // EVENT LISTENERS
-        // ============================================
-        
-        // Console logging
         page.on('console', msg => {
             const type = msg.type();
             const text = msg.text();
@@ -206,66 +175,50 @@ async function runAccount(browser, account) {
             touch();
         });
 
-        // Page errors
         page.on('pageerror', err => {
             console.error(`[page:${account.name}] 💥 PAGE ERROR:`, err.message);
             touch();
         });
 
-        // Failed requests
         page.on('requestfailed', req => {
-            console.error(`[page:${account.name}] 🌐 REQUEST FAILED:`, req.url());
+            const url = req.url();
+            if (!url.includes('.png') && !url.includes('.jpg') && !url.includes('.gif') && !url.includes('.css') && !url.includes('fonts.googleapis.com')) {
+                console.error(`[page:${account.name}] 🌐 REQUEST FAILED:`, url);
+            }
             touch();
         });
 
-        // ============================================
-        // NAVIGATION HANDLER - INJECT SCRIPTS
-        // ============================================
         page.on('framenavigated', async (frame) => {
             if (frame === page.mainFrame()) {
                 const url = frame.url();
                 console.log(`\n[page:${account.name}] 📍 Navigated to:`, url);
                 touch();
-                
-                // Small delay for page to settle
                 await sleep(500);
-                
-                // Inject appropriate scripts
                 await injectScriptsForUrl(url);
             }
         });
+        
+        return page;
     }
 
     // ============================================
     // SCRIPT INJECTION LOGIC
     // ============================================
     async function injectScriptsForUrl(url) {
-        // Always inject auto_reload first
+        if (pageBroken) return;
+        
         if (autoReloadScript) {
-            try {
-                await page.addScriptTag({ content: autoReloadScript });
-            } catch (e) {
-                console.error('[runner] Failed to inject auto_reload:', e.message);
-            }
+            try { await page.addScriptTag({ content: autoReloadScript }); } catch (e) {}
         }
 
         const isThreadsPage = /https:\/\/craxpro\.to\/threads\//.test(url);
         const isPostThreadPage = url.includes("craxpro.to/forums/") && url.includes("post-thread");
-        const isHomePage = url === "https://craxpro.to" || url === "https://craxpro.to/";
 
-        // ============================================
-        // INJECTION LOGIC:
-        // - Threads page → Step2 (Like & Redirect)
-        // - Other pages (NOT post-thread) → Step1 (Fetch & Redirect)
-        // ============================================
-        
         if (isThreadsPage) {
-            // STEP 2: On threads page → Like and redirect to home
             console.log('[runner] 🎯 Page type: THREAD → Injecting Step2 (Like & Redirect)');
-            
             if (step2Script) {
                 try {
-                    await sleep(1000);  // Wait for page to load
+                    await sleep(1000);
                     await page.addScriptTag({ content: step2Script });
                     console.log('[runner] ✅ Step2 injected successfully');
                     lastInjectedUrl = url;
@@ -276,9 +229,7 @@ async function runAccount(browser, account) {
                 }
             }
         } else if (!isPostThreadPage) {
-            // STEP 1: On other pages → Fetch link from Firebase & Redirect
             console.log('[runner] 🎯 Page type: GENERAL → Injecting Step1 (Fetch & Redirect)');
-            
             if (step1Script) {
                 try {
                     await sleep(1000);
@@ -295,54 +246,80 @@ async function runAccount(browser, account) {
     }
 
     // ============================================
-    // INITIAL NAVIGATION
+    // CHECK IF PAGE IS BROKEN
     // ============================================
-    async function initialNavigation() {
-        // Start at homepage (or custom startUrl)
-        const startUrl = account.startUrl || "https://craxpro.to";
-        console.log('[runner] 🌐 Navigating to:', startUrl);
-
-        await page.goto(startUrl, {
-            waitUntil: 'networkidle2',
-            timeout: 60000
-        });
-        console.log('[runner] ✅ Initial page loaded');
+    async function isPageBroken() {
+        if (!page || page.isClosed()) return true;
+        try {
+            await page.evaluate(() => document.title);
+            return false;
+        } catch (e) {
+            return e.message.includes('detached') || e.message.includes('Target closed');
+        }
     }
 
     // ============================================
-    // WATCHDOG - Auto restart if idle
+    // RECOVER PAGE
+    // ============================================
+    async function recoverPage() {
+        console.log('[runner] 🔧 Recovering broken page...');
+        restartCount++;
+        console.log(`[runner] 📊 Restart count: ${restartCount}/${MAX_RESTARTS_PER_ACCOUNT}`);
+        
+        try {
+            await openPage();
+            const startUrl = account.startUrl || "https://craxpro.to";
+            console.log('[runner] 🌐 Navigating to:', startUrl);
+            await page.goto(startUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+            console.log('[runner] ✅ Page recovered successfully');
+            touch();
+            return true;
+        } catch (e) {
+            console.error('[runner] ❌ Failed to recover page:', e.message);
+            return false;
+        }
+    }
+
+    // ============================================
+    // WATCHDOG
     // ============================================
     const watchdog = setInterval(async () => {
+        if (await isPageBroken()) {
+            console.log('[watchdog] ⚠️ Page is broken (detached frame)');
+            if (restartCount < MAX_RESTARTS_PER_ACCOUNT) {
+                await recoverPage();
+            } else {
+                console.log('[watchdog] 🛑 Max restarts reached');
+                clearInterval(watchdog);
+                clearInterval(heartbeat);
+            }
+            return;
+        }
+        
         const idle = Date.now() - lastActivity;
         if (idle > IDLE_TIMEOUT_MS) {
-            restartCount++;
-            console.log(`[watchdog] ⚠️ Idle for ${Math.floor(idle/1000)}s, restarting... (${restartCount}/${MAX_RESTARTS_PER_ACCOUNT})`);
-            
-            try {
-                await page.reload({ waitUntil: 'networkidle2' });
-            } catch (e) {
-                console.error('[watchdog] ❌ Reload failed:', e.message);
-            }
-            touch();
-
-            if (restartCount >= MAX_RESTARTS_PER_ACCOUNT) {
-                console.log('[watchdog] 🛑 Max restarts reached, stopping watchdog');
+            console.log(`[watchdog] ⚠️ Idle for ${Math.floor(idle/1000)}s`);
+            if (restartCount < MAX_RESTARTS_PER_ACCOUNT) {
+                await recoverPage();
+            } else {
+                console.log('[watchdog] 🛑 Max restarts reached');
                 clearInterval(watchdog);
             }
         }
     }, WATCHDOG_INTERVAL_MS);
 
     // ============================================
-    // HEARTBEAT - Keep connection alive
+    // HEARTBEAT
     // ============================================
     const heartbeat = setInterval(async () => {
-        if (page && !page.isClosed()) {
-            try {
-                await page.evaluate(() => document.title);
-                touch();
-            } catch (e) {
-                console.error('[heartbeat] ❌ Error:', e.message);
+        if (await isPageBroken()) {
+            console.error('[heartbeat] ❌ Page is broken (detached frame detected)');
+            pageBroken = true;
+            if (restartCount < MAX_RESTARTS_PER_ACCOUNT) {
+                await recoverPage();
             }
+        } else {
+            touch();
         }
     }, HEARTBEAT_MS);
 
@@ -351,21 +328,19 @@ async function runAccount(browser, account) {
     // ============================================
     try {
         await openPage();
-        await initialNavigation();
+        const startUrl = account.startUrl || "https://craxpro.to";
+        console.log('[runner] 🌐 Navigating to:', startUrl);
+        await page.goto(startUrl, { waitUntil: 'networkidle2', timeout: 60000 });
+        console.log('[runner] ✅ Initial page loaded');
 
         const startTime = Date.now();
         console.log('\n[runner] ⏱️ Running for 60 minutes...');
-        console.log('[runner] 📊 Waiting for scripts to execute...\n');
 
         while (Date.now() - startTime < ONE_HOUR_MS) {
             const elapsed = Math.floor((Date.now() - startTime) / 60000);
             const remaining = 60 - elapsed;
-            
-            console.log(`\n[runner] ⏰ Status: ${elapsed}min elapsed | ${remaining}min remaining`);
-            console.log(`[runner] 🔄 Cycles completed: ${cycleCount}`);
-            console.log(`[runner] 🔗 Last URL: ${lastInjectedUrl || 'none'}`);
-            
-            await sleep(60000);  // Log every minute
+            console.log(`\n[runner] ⏰ ${elapsed}min elapsed | ${remaining}min remaining | Cycles: ${cycleCount} | Restarts: ${restartCount}`);
+            await sleep(60000);
         }
 
     } catch (e) {
@@ -373,15 +348,8 @@ async function runAccount(browser, account) {
     } finally {
         clearInterval(watchdog);
         clearInterval(heartbeat);
-        
-        try {
-            await page.close();
-        } catch (e) {}
-        
-        console.log(`\n${'='.repeat(50)}`);
-        console.log(`🏁 END ACCOUNT: ${account.name}`);
-        console.log(`📊 Total cycles: ${cycleCount}`);
-        console.log(`${'='.repeat(50)}\n`);
+        try { if (page && !page.isClosed()) await page.close(); } catch (e) {}
+        console.log(`\n🏁 END: ${account.name} | Cycles: ${cycleCount} | Restarts: ${restartCount}`);
     }
 }
 
@@ -390,11 +358,9 @@ async function runAccount(browser, account) {
 // ============================================
 async function main() {
     console.log('\n' + '='.repeat(60));
-    console.log('🤖 MULTI-ACCOUNT BOT v2.0');
-    console.log('📋 Flow: Fetch Link → Like Post → Repeat');
+    console.log('🤖 MULTI-ACCOUNT BOT v2.1 - Auto Recovery Enabled');
     console.log('='.repeat(60) + '\n');
 
-    // Load accounts configuration
     let accounts;
     
     if (process.env.ACCOUNTS_JSON) {
@@ -404,13 +370,12 @@ async function main() {
         console.log('[runner] 📂 Loading accounts from accounts.json');
         accounts = JSON.parse(fs.readFileSync('./accounts.json', 'utf8'));
     } else {
-        console.error('[runner] ❌ ACCOUNTS_JSON missing and accounts.json not found');
+        console.error('[runner] ❌ No accounts configuration found');
         process.exit(1);
     }
 
     console.log(`[runner] 👥 Starting with ${accounts.length} account(s)\n`);
 
-    // Launch browser
     const browser = await puppeteer.launch({
         headless: true,
         executablePath: process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
@@ -427,7 +392,6 @@ async function main() {
         ]
     });
 
-    // Run each account
     for (const account of accounts) {
         await runAccount(browser, account);
     }
@@ -436,7 +400,6 @@ async function main() {
     console.log('\n[runner] ✅ All accounts completed.');
 }
 
-// Start
 main().catch(e => {
     console.error('[runner] 💥 FATAL ERROR:', e);
     process.exit(1);
