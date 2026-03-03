@@ -1,0 +1,21 @@
+{
+  "name": "multi-account-bot-v2",
+  "version": "2.0.0",
+  "description": "Multi-account bot - Fetch links, like posts, repeat cycle",
+  "main": "run.js",
+  "scripts": {
+    "start": "node scheduler.js",
+    "bot": "node run.js",
+    "scheduler": "node scheduler.js"
+  },
+  "dependencies": {
+    "puppeteer": "^21.0.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "author": "",
+  "license": "ISC"
+}

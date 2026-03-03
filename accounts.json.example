@@ -1,0 +1,24 @@
+[
+  {
+    "name": "Account1",
+    "startUrl": "https://craxpro.to",
+    "cookies": [
+      {
+        "name": "xf_user",
+        "value": "YOUR_XF_USER_COOKIE_VALUE_HERE",
+        "domain": ".craxpro.to",
+        "path": "/",
+        "secure": true,
+        "httpOnly": true
+      },
+      {
+        "name": "xf_csrf",
+        "value": "YOUR_XF_CSRF_COOKIE_VALUE_HERE",
+        "domain": ".craxpro.to",
+        "path": "/",
+        "secure": true,
+        "httpOnly": false
+      }
+    ]
+  }
+]

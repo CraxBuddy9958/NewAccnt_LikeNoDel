@@ -1,0 +1,7 @@
+[build]
+builder = "nixpacks"
+
+[deploy]
+startCommand = "node scheduler.js"
+restartPolicyType = "always"
+restartPolicyMaxRetries = 10
