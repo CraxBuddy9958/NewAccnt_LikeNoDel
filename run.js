@@ -1,4 +1,4 @@
-// run.js - Multi-Account Bot v2.3 - Stable Recovery
+// run.js - Multi-Account Bot v2.4 - With Configurable Link Removal
 const fs = require('fs');
 const path = require('path');
 const puppeteer = require('puppeteer-extra');
@@ -9,7 +9,7 @@ puppeteer.use(StealthPlugin());
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const RESTART_DELAY_MS = 5000;
 const MAX_RESTARTS = 5;
-const IDLE_TIMEOUT_MS = 3 * 60 * 1000;
+const IDLE_TIMEOUT_MS = 30 * 1000;  // 🔧 CHANGED: 30 seconds (was 3 minutes)
 
 function sleep(ms) { 
     return new Promise(resolve => setTimeout(resolve, ms)); 
@@ -94,7 +94,7 @@ async function runSession(account, scripts, sessionId) {
         // Event handlers
         page.on('console', msg => {
             const text = msg.text();
-            if (text.includes('Step1') || text.includes('Step2') || text.includes('Liked')) {
+            if (text.includes('Step1') || text.includes('Step2') || text.includes('Liked') || text.includes('Removed') || text.includes('REMOVE_LINKS')) {
                 console.log(`[page] 📜`, text);
                 lastActivity = Date.now();
             }
@@ -150,14 +150,14 @@ async function runSession(account, scripts, sessionId) {
             
             console.log(`[runner] ⏰ ${elapsed}min | Cycles: ${cycleCount} | Idle: ${idle}s`);
             
-            // Check for idle timeout
+            // Check for idle timeout (30 seconds)
             if (Date.now() - lastActivity > IDLE_TIMEOUT_MS) {
-                console.log('[runner] ⚠️ Idle timeout, reloading...');
+                console.log('[runner] ⚠️ Idle timeout (30s), reloading...');
                 await page.reload({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
                 lastActivity = Date.now();
             }
             
-            await sleep(60000);
+            await sleep(10000);  // Check every 10 seconds instead of 60
         }
 
     } catch (e) {
@@ -175,7 +175,8 @@ async function runSession(account, scripts, sessionId) {
 // ============================================
 async function main() {
     console.log('\n' + '='.repeat(60));
-    console.log('🤖 MULTI-ACCOUNT BOT v2.3 - Stable Recovery');
+    console.log('🤖 MULTI-ACCOUNT BOT v2.4 - Configurable Link Removal');
+    console.log('🔧 IDLE TIMEOUT: 30 seconds');
     console.log('='.repeat(60) + '\n');
 
     let accounts;
