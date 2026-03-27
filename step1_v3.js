@@ -1,4 +1,4 @@
-// step1_v3.js - FAST VERSION with Optional Link Removal + IP Detection for Fake Pages
+// step1_v3.js - FAST VERSION with Optional Link Removal + Smart IP Detection
 // ============================================
 // CONFIGURATION - Set REMOVE_LINKS to true/false
 // ============================================
@@ -14,124 +14,127 @@ const REMOVE_LINKS = true;  // <-- SET TO true TO REMOVE LINKS FROM FIREBASE
 
     console.log('[Step1] 🚀 Starting...');
     console.log(`[Step1] ⚙️ REMOVE_LINKS = ${REMOVE_LINKS}`);
+    console.log(`[Step1] 📍 Current URL: ${window.location.href}`);
 
     const DB_URL = "https://craxlinks-bb690-default-rtdb.firebaseio.com/links.json";
+    const FAKE_PAGE_TIMEOUT = 30000; // 30 seconds max wait for fake page to redirect
 
     // ============================================
-    // IP ADDRESS DETECTION (For Fake Cloudflare Pages)
+    // CHECK FOR FAKE DNSPROXY PAGE
+    // These elements are UNIQUE to the fake page
     // ============================================
-    function detectIPAddress() {
-        // Try multiple selectors to find the IP address element
-        const selectors = [
-            '#ip',
-            '.info-value#ip',
-            '.info-row #ip',
-            'span[id="ip"]',
-            '[id*="ip"]',
-            '.ip-address',
-            '#ip-address',
-            'span.ip'
-        ];
-
-        for (const selector of selectors) {
-            try {
-                const el = document.querySelector(selector);
-                if (el && el.textContent) {
-                    const ip = el.textContent.trim();
-                    // Validate IP format
-                    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-                        console.log('[Step1] 🌐 IP Address detected:', ip);
-                        return ip;
-                    }
-                }
-            } catch (e) {}
+    function isFakeDNSProxyPage() {
+        // Check 1: Look for DNSPROXY ANTIBOT header (most reliable)
+        const allH1 = document.querySelectorAll('h1');
+        for (const h1 of allH1) {
+            if (h1.textContent && h1.textContent.toUpperCase().includes('DNSPROXY')) {
+                console.log('[Step1] 🔍 Found DNSPROXY in H1 - FAKE PAGE');
+                return true;
+            }
+            if (h1.textContent && h1.textContent.toUpperCase().includes('ANTIBOT')) {
+                console.log('[Step1] 🔍 Found ANTIBOT in H1 - FAKE PAGE');
+                return true;
+            }
         }
 
-        // Fallback: search by label text
-        try {
-            const infoRows = document.querySelectorAll('.info-row');
-            for (const row of infoRows) {
-                const label = row.querySelector('.info-label');
-                if (label && label.textContent.toLowerCase().includes('ip address')) {
-                    const valueEl = row.querySelector('.info-value, #ip');
-                    if (valueEl) {
-                        const ip = valueEl.textContent.trim();
-                        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
-                            console.log('[Step1] 🌐 IP Address detected:', ip);
-                            return ip;
-                        }
-                    }
-                }
+        // Check 2: Look for verification-card class
+        const verificationCard = document.querySelector('.verification-card');
+        if (verificationCard) {
+            console.log('[Step1] 🔍 Found .verification-card - FAKE PAGE');
+            return true;
+        }
+
+        // Check 3: Look for "DNSProxy" branding
+        const pageText = document.body ? document.body.innerText : '';
+        if (pageText.includes('DNSProxy') || pageText.includes('dnsproxy')) {
+            console.log('[Step1] 🔍 Found DNSProxy in page text - FAKE PAGE');
+            return true;
+        }
+
+        // Check 4: Look for specific combination of elements
+        // Fake page has: .container > .verification-card > .info-row > #ip
+        const hasContainer = document.querySelector('.container');
+        const hasInfoRow = document.querySelector('.info-row');
+        const hasIP = document.querySelector('#ip');
+        const hasProgressBar = document.querySelector('.progress-bar-fill, .progress-bar-track');
+        const hasSecureBadge = document.querySelector('.secure-badge');
+        
+        // If it has container + verification card style layout + IP = likely fake page
+        if (hasContainer && hasIP && (hasInfoRow || hasProgressBar || hasSecureBadge)) {
+            console.log('[Step1] 🔍 Found container + IP + info elements - FAKE PAGE');
+            return true;
+        }
+
+        // Check 5: Look for "Verification complete! Redirecting..." text
+        if (pageText.includes('Verification complete') || pageText.includes('Redirecting...')) {
+            // Make sure it's not the real page with this text in a different context
+            const footer = document.querySelector('.footer');
+            if (footer && footer.textContent.includes('Redirecting')) {
+                console.log('[Step1] 🔍 Found "Verification complete" + "Redirecting" - FAKE PAGE');
+                return true;
             }
-        } catch (e) {}
+        }
 
-        // Additional fallback: search entire page text for IP pattern
-        try {
-            const pageText = document.body.innerText || document.body.textContent || '';
-            const ipMatch = pageText.match(/\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b/);
-            if (ipMatch && ipMatch[1]) {
-                // Verify it's a valid IP (not 0.0.0.0 or similar)
-                const parts = ipMatch[1].split('.').map(Number);
-                if (parts.every(p => p >= 0 && p <= 255) && !(parts[0] === 0 && parts[1] === 0 && parts[2] === 0 && parts[3] === 0)) {
-                    console.log('[Step1] 🌐 IP found in page text:', ipMatch[1]);
-                    return ipMatch[1];
-                }
+        // Check 6: Look for abuse@dnsproxy.org link
+        const links = document.querySelectorAll('a');
+        for (const link of links) {
+            if (link.href && link.href.includes('dnsproxy.org')) {
+                console.log('[Step1] 🔍 Found dnsproxy.org link - FAKE PAGE');
+                return true;
             }
-        } catch (e) {}
-
-        return null;
-    }
-
-    // ============================================
-    // CHECK FOR FAKE CLOUDFLARE PAGE
-    // ============================================
-    function isFakeCloudflarePage() {
-        // Check for common fake Cloudflare indicators
-        const indicators = [
-            // Check for IP display
-            () => detectIPAddress() !== null,
-            
-            // Check for specific text patterns
-            () => {
-                const pageText = document.body.innerText.toLowerCase();
-                return pageText.includes('checking your browser') ||
-                       pageText.includes('please wait') ||
-                       pageText.includes('cloudflare') ||
-                       pageText.includes('ddos protection') ||
-                       pageText.includes('security check');
-            },
-            
-            // Check for specific elements
-            () => {
-                const cfElements = document.querySelectorAll('[class*="cloudflare"], [id*="cloudflare"], .challenge-form, #challenge-form');
-                return cfElements.length > 0;
-            },
-            
-            // Check for redirect meta tags
-            () => {
-                const metaRefresh = document.querySelector('meta[http-equiv="refresh"]');
-                return metaRefresh !== null;
-            }
-        ];
-
-        for (const check of indicators) {
-            try {
-                if (check()) {
-                    return true;
-                }
-            } catch (e) {}
         }
 
         return false;
     }
 
     // ============================================
-    // HANDLE FAKE PAGE - Extract IP and Wait/Reload
+    // EXTRACT IP FROM FAKE PAGE
+    // ============================================
+    function extractIPFromFakePage() {
+        // Method 1: Direct #ip element
+        const ipEl = document.querySelector('#ip');
+        if (ipEl && ipEl.textContent) {
+            const ip = ipEl.textContent.trim();
+            if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                return ip;
+            }
+        }
+
+        // Method 2: Find by label "IP Address"
+        const infoRows = document.querySelectorAll('.info-row');
+        for (const row of infoRows) {
+            const label = row.querySelector('.info-label');
+            if (label && label.textContent.toLowerCase().includes('ip address')) {
+                const valueEl = row.querySelector('.info-value, #ip');
+                if (valueEl) {
+                    const ip = valueEl.textContent.trim();
+                    if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+                        return ip;
+                    }
+                }
+            }
+        }
+
+        // Method 3: Any .info-value that looks like IP
+        const infoValues = document.querySelectorAll('.info-value');
+        for (const el of infoValues) {
+            const text = el.textContent.trim();
+            if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(text)) {
+                return text;
+            }
+        }
+
+        return null;
+    }
+
+    // ============================================
+    // HANDLE FAKE PAGE - Extract IP and Wait for Redirect
     // ============================================
     async function handleFakePage() {
-        console.log('[Step1] ⚠️ Fake Cloudflare-type page detected!');
+        console.log('[Step1] ⚠️ FAKE DNSPROXY PAGE DETECTED!');
         
-        const ip = detectIPAddress();
+        // Extract IP
+        const ip = extractIPFromFakePage();
         if (ip) {
             console.log('[Step1] 🌐 Scraped IP from fake page:', ip);
             
@@ -158,35 +161,14 @@ const REMOVE_LINKS = true;  // <-- SET TO true TO REMOVE LINKS FROM FIREBASE
             }
         }
 
-        // Wait for the page to potentially redirect itself
-        console.log('[Step1] ⏳ Waiting for page to redirect or load...');
+        // Wait for the page to auto-redirect
+        console.log('[Step1] 🔄 Waiting for fake page to auto-redirect...');
+        console.log('[Step1] ⏳ Will wait up to 30 seconds for redirect...');
         
-        // Check for form submission or auto-redirect
-        const challengeForm = document.querySelector('form#challenge-form, form.challenge-form, input[type="submit"]');
-        if (challengeForm) {
-            console.log('[Step1] 📝 Found challenge form, attempting to submit...');
-            try {
-                // Try to submit the form
-                const form = challengeForm.closest('form') || challengeForm;
-                if (form && form.submit) {
-                    form.submit();
-                    return true;
-                }
-            } catch (e) {}
-        }
-
-        // Check for JavaScript redirect
-        const scripts = document.querySelectorAll('script');
-        for (const script of scripts) {
-            const content = script.textContent || '';
-            if (content.includes('location.href') || content.includes('window.location') || content.includes('redirect')) {
-                console.log('[Step1] 🔄 Found redirect script, waiting...');
-                // Let the script handle the redirect
-                return false;
-            }
-        }
-
-        return false;
+        await new Promise(resolve => setTimeout(resolve, FAKE_PAGE_TIMEOUT));
+        
+        console.log('[Step1] ⏰ Wait complete');
+        return true;
     }
 
     // ============================================
@@ -242,28 +224,22 @@ const REMOVE_LINKS = true;  // <-- SET TO true TO REMOVE LINKS FROM FIREBASE
     // ============================================
     async function fetchAndRedirect() {
         try {
-            // FIRST: Check if current page is a fake Cloudflare page
-            if (isFakeCloudflarePage()) {
+            // ============================================
+            // FIRST: Check if this is a fake DNSPROXY page
+            // ============================================
+            if (isFakeDNSProxyPage()) {
                 const handled = await handleFakePage();
                 if (handled) {
-                    // Form was submitted, wait for redirect
+                    console.log('[Step1] 🛑 Fake page handled, STOPPING - waiting for page refresh');
+                    window.__step1Running = false;
                     return;
                 }
-                // Otherwise, continue with normal flow
             }
 
-            // Check for IP on any page (even non-fake ones)
-            const currentIP = detectIPAddress();
-            if (currentIP) {
-                console.log('[Step1] 🌐 Current page IP:', currentIP);
-                // Store it
-                try {
-                    sessionStorage.setItem('__lastDetectedIP', currentIP);
-                } catch (e) {}
-            }
-
-            // NOW: Fetch link from Firebase
-            console.log('[Step1] 🚀 Fetching link...');
+            // ============================================
+            // We're on a REAL page - proceed with fetch/redirect
+            // ============================================
+            console.log('[Step1] ✅ REAL page confirmed - proceeding with fetch...');
             
             const response = await fetch(DB_URL, { cache: 'no-cache' });
             if (!response.ok) { console.log('[Step1] ❌ Fetch failed'); return; }
