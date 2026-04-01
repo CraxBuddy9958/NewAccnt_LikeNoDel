@@ -54,7 +54,7 @@ async function runSession(account, scripts, sessionId) {
     try {
         // Create browser
         browser = await puppeteer.launch({
-            headless: true,
+            headless: false,
             executablePath: process.env.CHROME_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
             args: [
                 '--no-sandbox',
