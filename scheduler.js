@@ -15,14 +15,14 @@ const fs = require('fs');
 // ============================================
 // ⚙️ CONFIGURATION - SET YOUR LAUNCH TIME HERE
 // ============================================
-const LAUNCH_HOUR_IST = 22;      // 23 = 11 PM IST
+const LAUNCH_HOUR_IST = 13;      // 23 = 11 PM IST
 const LAUNCH_MINUTE_IST = 38;    // Minutes (0-59)
 
 // ============================================
 // CONSTANTS
 // ============================================
 const ONE_HOUR_MS = 60 * 60 * 1000;
-const CYCLE_HOURS_MS = 25 * 60 * 60 * 1000;  // 25 hours
+const CYCLE_HOURS_MS = 24 * 60 * 60 * 1000;  // 25 hours
 const SAFETY_TIMEOUT_MS = 65 * 60 * 1000;    // 65 minutes safety
 
 // ============================================
